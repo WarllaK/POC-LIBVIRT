@@ -15,8 +15,7 @@ import java.util.Map;
  */
 public class LibvirtCollector {
     private static final Logger logger = LoggerFactory.getLogger(LibvirtCollector.class);
-    
-    // Configuração hardcoded para POC
+
     private static final String LIBVIRT_URI = "qemu:///system";
     private static final String PROMETHEUS_PUSHGATEWAY_URL = "http://localhost:9091";
     private static final int COLLECT_INTERVAL_SECONDS = 30;
@@ -54,7 +53,6 @@ public class LibvirtCollector {
 
             if (domainIds.length == 0) {
                 logger.warn("Nenhuma VM encontrada. Verifique: virsh list");
-                // Tentar listar todos os domínios (incluindo parados)
                 try {
                     String[] allDomains = connection.listDefinedDomains();
                     if (allDomains.length > 0) {
