@@ -10,9 +10,6 @@ import org.slf4j.LoggerFactory;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Coletor simples de métricas libvirt para POC
- */
 public class LibvirtCollector {
     private static final Logger logger = LoggerFactory.getLogger(LibvirtCollector.class);
 
@@ -36,10 +33,7 @@ public class LibvirtCollector {
             throw new RuntimeException("Falha na inicialização", e);
         }
     }
-    
-    /**
-     * Coleta métricas de todas as VMs em execução
-     */
+
     public void collectMetrics() {
         try {
             int[] domainIds = connection.listDomains();
@@ -77,10 +71,7 @@ public class LibvirtCollector {
             logger.error("Erro ao listar domínios: {}", e.getMessage(), e);
         }
     }
-    
-    /**
-     * Coleta métricas básicas de uma VM
-     */
+
     private void collectDomainMetrics(Domain domain) throws LibvirtException {
         try {
             String vmName = domain.getName();
@@ -110,10 +101,7 @@ public class LibvirtCollector {
             logger.error("Erro ao coletar métricas: {}", e.getMessage(), e);
         }
     }
-    
-    /**
-     * Fecha conexões
-     */
+
     public void close() {
         try {
             if (connection != null) {
