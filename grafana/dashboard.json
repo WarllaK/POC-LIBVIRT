@@ -1,0 +1,210 @@
+{
+  "dashboard": {
+    "title": "Libvirt Monitoring POC",
+    "tags": ["libvirt", "poc"],
+    "timezone": "browser",
+    "schemaVersion": 38,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Total de VMs",
+        "type": "stat",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "datasource": {
+              "type": "influxdb",
+              "uid": "InfluxDB"
+            },
+            "query": "from(bucket: \"vm-metrics\") |> range(start: -5m) |> filter(fn: (r) => r[\"_measurement\"] == \"vm_metrics\") |> distinct(column: \"vm_uuid\") |> count()",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "colorMode": "value",
+          "graphMode": "none",
+          "justifyMode": "auto",
+          "orientation": "auto",
+          "textMode": "auto"
+        },
+        "fieldConfig": {
+          "defaults": {
+            "color": {
+              "mode": "thresholds"
+            },
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"value": null, "color": "green"}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "id": 2,
+        "title": "CPU Time por VM",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+        "targets": [
+          {
+            "datasource": {
+              "type": "influxdb",
+              "uid": "InfluxDB"
+            },
+            "query": "from(bucket: \"vm-metrics\") |> range(start: -1h) |> filter(fn: (r) => r[\"_measurement\"] == \"vm_metrics\") |> filter(fn: (r) => r[\"_field\"] == \"cpu_time\") |> aggregateWindow(every: 1m, fn: mean, createEmpty: false) |> yield(name: \"mean\")",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "linear",
+              "fillOpacity": 10
+            },
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "s"
+          }
+        },
+        "options": {
+          "legend": {
+            "displayMode": "table",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "multi"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "title": "Uso de Memória por VM",
+        "type": "timeseries",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+        "targets": [
+          {
+            "datasource": {
+              "type": "influxdb",
+              "uid": "InfluxDB"
+            },
+            "query": "from(bucket: \"vm-metrics\") |> range(start: -1h) |> filter(fn: (r) => r[\"_measurement\"] == \"vm_metrics\") |> filter(fn: (r) => r[\"_field\"] == \"memory_kb\") |> map(fn: (r) => ({ r with _value: r._value / 1048576.0 })) |> aggregateWindow(every: 1m, fn: mean, createEmpty: false) |> yield(name: \"mean\")",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "drawStyle": "line",
+              "lineInterpolation": "linear",
+              "fillOpacity": 10
+            },
+            "color": {
+              "mode": "palette-classic"
+            },
+            "unit": "decgbytes"
+          }
+        },
+        "options": {
+          "legend": {
+            "displayMode": "table",
+            "placement": "bottom"
+          },
+          "tooltip": {
+            "mode": "multi"
+          }
+        }
+      },
+      {
+        "id": 4,
+        "title": "Tabela de VMs",
+        "type": "table",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+        "targets": [
+          {
+            "datasource": {
+              "type": "influxdb",
+              "uid": "InfluxDB"
+            },
+            "query": "from(bucket: \"vm-metrics\") |> range(start: -5m) |> filter(fn: (r) => r[\"_measurement\"] == \"vm_metrics\") |> last() |> group(columns: [\"vm_name\"]) |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "showHeader": true,
+          "sortBy": []
+        },
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "align": "auto",
+              "displayMode": "auto"
+            }
+          },
+          "overrides": [
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "vm_name"
+              },
+              "properties": [
+                {
+                  "id": "custom.width",
+                  "value": 200
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "memory_kb"
+              },
+              "properties": [
+                {
+                  "id": "unit",
+                  "value": "deckbytes"
+                },
+                {
+                  "id": "displayName",
+                  "value": "Memória (GB)"
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "cpu_time"
+              },
+              "properties": [
+                {
+                  "id": "unit",
+                  "value": "s"
+                },
+                {
+                  "id": "displayName",
+                  "value": "CPU Time"
+                }
+              ]
+            },
+            {
+              "matcher": {
+                "id": "byName",
+                "options": "state"
+              },
+              "properties": [
+                {
+                  "id": "displayName",
+                  "value": "Estado"
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
