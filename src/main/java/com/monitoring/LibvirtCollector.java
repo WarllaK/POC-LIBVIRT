@@ -1,121 +1,191 @@
 package com.monitoring;
 
-import org.libvirt.Connect;
-import org.libvirt.Domain;
-import org.libvirt.DomainInfo;
-import org.libvirt.LibvirtException;
+import org.libvirt.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.xml.parsers.DocumentBuilderFactory;
+import java.io.ByteArrayInputStream;
 import java.util.HashMap;
 import java.util.Map;
 
+import org.w3c.dom.*;
+
 public class LibvirtCollector {
+
     private static final Logger logger = LoggerFactory.getLogger(LibvirtCollector.class);
 
     private static final String LIBVIRT_URI = "qemu:///system";
     private static final String PROMETHEUS_PUSHGATEWAY_URL = "http://localhost:9091";
     private static final int COLLECT_INTERVAL_SECONDS = 30;
-    
+
     private Connect connection;
     private PrometheusWriter prometheusWriter;
-    
+
     public LibvirtCollector() {
         try {
+            connection = new Connect(LIBVIRT_URI);
+            prometheusWriter = new PrometheusWriter(PROMETHEUS_PUSHGATEWAY_URL);
 
-            this.connection = new Connect(LIBVIRT_URI);
-            logger.info("Conectado ao libvirt: {}", LIBVIRT_URI);
-
-            this.prometheusWriter = new PrometheusWriter(PROMETHEUS_PUSHGATEWAY_URL);
-            
+            logger.info("Conectado ao libvirt");
         } catch (Exception e) {
-            logger.error("Erro ao inicializar: {}", e.getMessage(), e);
-            throw new RuntimeException("Falha na inicialização", e);
+            logger.error("Erro ao inicializar", e);
+            throw new RuntimeException(e);
         }
     }
 
     public void collectMetrics() {
         try {
-            int[] domainIds = connection.listDomains();
-            logger.info("Encontradas {} VMs em execução", domainIds.length);
+            int[] ids = connection.listDomains();
 
-            if (domainIds.length == 0) {
-                logger.warn("Nenhuma VM em execução. Crie VMs para coletar métricas.");
-                logger.info("Para criar VMs de teste: ./scripts/criar-vm-simples.sh 3");
+            if (ids.length == 0) {
+                logger.warn("Nenhuma VM rodando");
                 return;
             }
 
-            if (domainIds.length == 0) {
-                logger.warn("Nenhuma VM encontrada. Verifique: virsh list");
-                try {
-                    String[] allDomains = connection.listDefinedDomains();
-                    if (allDomains.length > 0) {
-                        logger.info("VMs definidas mas paradas: {}", String.join(", ", allDomains));
-                        logger.info("Dica: Inicie as VMs com: virsh start <nome>");
-                    }
-                } catch (Exception e) {
-                    logger.debug("Erro ao listar domínios definidos: {}", e.getMessage());
-                }
+            for (int id : ids) {
+                collectFromDomain(id);
             }
 
-            for (int domainId : domainIds) {
-                try {
-                    Domain domain = connection.domainLookupByID(domainId);
-                    collectDomainMetrics(domain);
-                } catch (LibvirtException e) {
-                    logger.warn("Erro ao coletar métricas da VM ID {}: {}", domainId, e.getMessage());
-                }
-            }
-            
         } catch (LibvirtException e) {
-            logger.error("Erro ao listar domínios: {}", e.getMessage(), e);
+            logger.error("Erro listando domínios", e);
         }
     }
 
-    private void collectDomainMetrics(Domain domain) throws LibvirtException {
+    private void collectFromDomain(int id) {
         try {
-            String vmName = domain.getName();
-            String uuid = domain.getUUIDString();
-
-            DomainInfo domainInfo = domain.getInfo();
-            long cpuTime = domainInfo.cpuTime;
-            long memoryKB = domainInfo.memory;
-            long maxMemoryKB = domain.getMaxMemory();
-            int state = domainInfo.state.ordinal();
-
-            Map<String, Object> metrics = new HashMap<>();
-            metrics.put("timestamp", System.currentTimeMillis());
-            metrics.put("vm_name", vmName);
-            metrics.put("vm_uuid", uuid);
-            metrics.put("cpu_time", cpuTime);
-            metrics.put("memory_kb", memoryKB);
-            metrics.put("max_memory_kb", maxMemoryKB);
-            metrics.put("state", state);
-
+            Domain domain = connection.domainLookupByID(id);
+            Map<String, Object> metrics = buildMetrics(domain);
             prometheusWriter.writeMetrics(metrics);
-            
-            logger.debug("Métricas coletadas para VM: {} (CPU: {}, Mem: {} KB)", 
-                        vmName, cpuTime, memoryKB);
-            
+
         } catch (Exception e) {
-            logger.error("Erro ao coletar métricas: {}", e.getMessage(), e);
+            logger.warn("Erro VM {} -> {}", id, e.getMessage());
         }
+    }
+
+    private Map<String, Object> buildMetrics(Domain domain) throws Exception {
+
+        DomainInfo info = domain.getInfo();
+
+        Map<String, Object> m = new HashMap<>();
+
+        String name = domain.getName();
+
+        long cpuNs = info.cpuTime;
+        long cpuSec = cpuNs / 1_000_000_000L;
+
+        int vcpus = info.nrVirtCpu;
+
+        long mem = info.memory;
+        long maxMem = domain.getMaxMemory();
+
+        m.put("timestamp", System.currentTimeMillis());
+        m.put("vm_name", name);
+        m.put("vm_uuid", domain.getUUIDString());
+
+        m.put("cpu_time_ns", cpuNs);
+        m.put("cpu_time_sec", cpuSec);
+        m.put("vcpus", vcpus);
+        m.put("uptime_sec", cpuSec / Math.max(vcpus, 1));
+
+        m.put("memory_kb", mem);
+        m.put("max_memory_kb", maxMem);
+        m.put("memory_usage_percent", percent(mem, maxMem));
+
+        m.put("state", info.state.ordinal());
+
+        addNetworkMetrics(domain, m);
+        addDiskMetrics(domain, m);
+
+        return m;
+    }
+
+    private void addNetworkMetrics(Domain domain, Map<String, Object> m) {
+        try {
+            String iface = getFirstInterfaceName(domain);
+            if (iface != null) {
+                var stats = domain.interfaceStats(iface);
+                m.put("net_rx_bytes", stats.rx_bytes);
+                m.put("net_tx_bytes", stats.tx_bytes);
+                return;
+            }
+        } catch (Exception e) {
+            logger.debug("Network stats erro: {}", e.getMessage());
+        }
+
+        m.put("net_rx_bytes", 0);
+        m.put("net_tx_bytes", 0);
+    }
+
+    private void addDiskMetrics(Domain domain, Map<String, Object> m) {
+        try {
+            String disk = getFirstDiskDevice(domain);
+            if (disk != null) {
+                var stats = domain.blockStats(disk);
+                m.put("disk_read_bytes", stats.rd_bytes);
+                m.put("disk_write_bytes", stats.wr_bytes);
+                return;
+            }
+        } catch (Exception e) {
+            logger.debug("Disk stats erro: {}", e.getMessage());
+        }
+
+        m.put("disk_read_bytes", 0);
+        m.put("disk_write_bytes", 0);
+    }
+
+    private String getFirstInterfaceName(Domain domain) throws Exception {
+        Document doc = getDomainXML(domain);
+
+        NodeList list = doc.getElementsByTagName("target");
+        for (int i = 0; i < list.getLength(); i++) {
+            Element el = (Element) list.item(i);
+            if (el.hasAttribute("dev")) {
+                return el.getAttribute("dev");
+            }
+        }
+        return null;
+    }
+
+    private String getFirstDiskDevice(Domain domain) throws Exception {
+        Document doc = getDomainXML(domain);
+
+        NodeList disks = doc.getElementsByTagName("target");
+        for (int i = 0; i < disks.getLength(); i++) {
+            Element el = (Element) disks.item(i);
+            if (el.hasAttribute("dev")) {
+                String dev = el.getAttribute("dev");
+                if (dev.startsWith("vd") || dev.startsWith("sd")) {
+                    return dev;
+                }
+            }
+        }
+        return null;
+    }
+
+    private Document getDomainXML(Domain domain) throws Exception {
+        String xml = domain.getXMLDesc(0);
+
+        return DocumentBuilderFactory
+                .newInstance()
+                .newDocumentBuilder()
+                .parse(new ByteArrayInputStream(xml.getBytes()));
+    }
+
+    private double percent(long used, long max) {
+        if (max == 0) return 0;
+        return (used * 100.0) / max;
     }
 
     public void close() {
         try {
-            if (connection != null) {
-                connection.close();
-                logger.info("Conexão libvirt fechada");
-            }
-            if (prometheusWriter != null) {
-                prometheusWriter.close();
-            }
+            if (connection != null) connection.close();
+            if (prometheusWriter != null) prometheusWriter.close();
         } catch (Exception e) {
-            logger.error("Erro ao fechar conexões: {}", e.getMessage(), e);
+            logger.error("Erro ao fechar", e);
         }
     }
-    
+
     public int getCollectIntervalSeconds() {
         return COLLECT_INTERVAL_SECONDS;
     }
