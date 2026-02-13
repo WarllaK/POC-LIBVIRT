@@ -86,7 +86,10 @@ public class LibvirtCollector {
         m.put("cpu_time_ns", cpuNs);
         m.put("cpu_time_sec", cpuSec);
         m.put("vcpus", vcpus);
-        m.put("uptime_sec", cpuSec / Math.max(vcpus, 1));
+        // Uptime estimado: CPU time total dividido pelo número de vCPUs
+        // Isso dá uma estimativa do tempo de execução da VM
+        // Nota: Não é o uptime real, mas uma aproximação baseada no uso de CPU
+        m.put("uptime_sec", vcpus > 0 ? cpuSec / vcpus : 0);
 
         m.put("memory_kb", mem);
         m.put("max_memory_kb", maxMem);
@@ -137,11 +140,16 @@ public class LibvirtCollector {
     private String getFirstInterfaceName(Domain domain) throws Exception {
         Document doc = getDomainXML(domain);
 
-        NodeList list = doc.getElementsByTagName("target");
-        for (int i = 0; i < list.getLength(); i++) {
-            Element el = (Element) list.item(i);
-            if (el.hasAttribute("dev")) {
-                return el.getAttribute("dev");
+        // Procurar dentro de elementos <interface>
+        NodeList interfaces = doc.getElementsByTagName("interface");
+        for (int i = 0; i < interfaces.getLength(); i++) {
+            Element iface = (Element) interfaces.item(i);
+            NodeList targets = iface.getElementsByTagName("target");
+            for (int j = 0; j < targets.getLength(); j++) {
+                Element target = (Element) targets.item(j);
+                if (target.hasAttribute("dev")) {
+                    return target.getAttribute("dev");
+                }
             }
         }
         return null;
@@ -150,13 +158,19 @@ public class LibvirtCollector {
     private String getFirstDiskDevice(Domain domain) throws Exception {
         Document doc = getDomainXML(domain);
 
-        NodeList disks = doc.getElementsByTagName("target");
+        // Procurar dentro de elementos <disk>
+        NodeList disks = doc.getElementsByTagName("disk");
         for (int i = 0; i < disks.getLength(); i++) {
-            Element el = (Element) disks.item(i);
-            if (el.hasAttribute("dev")) {
-                String dev = el.getAttribute("dev");
-                if (dev.startsWith("vd") || dev.startsWith("sd")) {
-                    return dev;
+            Element disk = (Element) disks.item(i);
+            NodeList targets = disk.getElementsByTagName("target");
+            for (int j = 0; j < targets.getLength(); j++) {
+                Element target = (Element) targets.item(j);
+                if (target.hasAttribute("dev")) {
+                    String dev = target.getAttribute("dev");
+                    // Aceitar qualquer dispositivo de disco (vd, sd, hd, xvd, etc)
+                    if (dev.matches("^(vd|sd|hd|xvd|nvme)[a-z0-9]+")) {
+                        return dev;
+                    }
                 }
             }
         }
